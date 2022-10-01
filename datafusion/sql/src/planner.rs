@@ -351,13 +351,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
         if let Some(with) = query.with {
-            // Process CTEs from top to bottom
-            if with.recursive {
-                return Err(DataFusionError::NotImplemented(
-                    "Recursive CTEs are not supported".to_string(),
-                ));
-            }
-            // do not allow self-references
+            let is_recursive = with.recursive;
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = normalize_ident(&cte.alias.name);
@@ -367,14 +361,87 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         cte_name
                     ))));
                 }
-                // create logical plan & pass backreferencing CTEs
-                let logical_plan = self.query_to_plan_with_alias(
-                    cte.query,
-                    Some(cte_name.clone()),
-                    &mut ctes.clone(),
-                    outer_query_schema,
-                )?;
-                ctes.insert(cte_name, logical_plan);
+                let cte_query = cte.query;
+                if is_recursive {
+                    match *cte_query.body {
+                        SetExpr::SetOperation {
+                            op: SetOperator::Union,
+                            left,
+                            right,
+                            all,
+                        } => {
+                            // Each recursive CTE consists from two parts in the logical plan:
+                            //   1. A static term   (the left hand side on the SQL, where the
+                            //                       referecing to the same CTE is not allowed)
+                            //
+                            //   2. A variadic term (the right hand side, and the recursive
+                            //                       part)
+
+                            // Since static term does not have any specific properties, it can
+                            // be compiled as if it was a regular expression. This would also
+                            // allow us to infer the schema to be used in the variadic term.
+                            let static_plan = self.set_expr_to_plan(
+                                *left,
+                                Some(cte_name.clone()),
+                                &mut ctes.clone(),
+                                outer_query_schema,
+                            )?;
+
+                            // Since the recursive CTE includes a component that references a
+                            // table with its name, like the example below:
+                            //
+                            // WITH RECURSIVE values(n) AS (
+                            //      SELECT 1 as n -- static term
+                            //    UNION ALL
+                            //      SELECT n + 1
+                            //      FROM values -- self reference
+                            //      WHERE n < 100
+                            // )
+                            //
+                            // The planner for the variadic term will complain that 'values' (self
+                            // reference) is not defined. For getting around this, while preserving
+                            // the actual schema of the whole operation, we'll register an empty relation
+                            // as a CTE with the name 'values'. This will allow the SQL planner to
+                            // handle the more complex cases (like joins and what not), and when we'll
+                            // get it to the proper form once we are compiling it into the final form.
+                            let term_scan = LogicalPlanBuilder::empty_with_schema(
+                                false,
+                                static_plan.schema().clone(),
+                            );
+                            ctes.insert(cte_name.clone(), term_scan.build()?);
+
+                            let variadic_plan = self.set_expr_to_plan(
+                                *right,
+                                Some(cte_name.clone()),
+                                &mut ctes.clone(),
+                                // TODO: this might not be so accurate.
+                                outer_query_schema,
+                            )?;
+
+                            let final_plan = LogicalPlanBuilder::from(static_plan)
+                                .union_recursive(variadic_plan, all)?
+                                .build()?;
+
+                            // This is where we are replacing the temporary CTE we registered with the actual
+                            // one.
+                            ctes.insert(cte_name.clone(), final_plan);
+                        }
+                        _ => {
+                            return Err(DataFusionError::SQL(ParserError(
+                                "Invalid recursive CTE".to_string(),
+                            )));
+                        }
+                    };
+                } else {
+                    // create logical plan & pass backreferencing CTEs
+                    let logical_plan = self.query_to_plan_with_alias(
+                        cte_query,
+                        Some(cte_name.clone()),
+                        &mut ctes.clone(),
+                        outer_query_schema,
+                    )?;
+                    ctes.insert(cte_name, logical_plan);
+                }
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;

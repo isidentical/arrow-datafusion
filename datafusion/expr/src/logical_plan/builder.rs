@@ -116,6 +116,13 @@ impl LogicalPlanBuilder {
         }))
     }
 
+    pub fn empty_with_schema(produce_one_row: bool, schema: DFSchemaRef) -> Self {
+        Self::from(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row,
+            schema,
+        }))
+    }
+
     /// Create a values list based relation, and the schema is inferred from data, consuming
     /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -442,6 +449,13 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
             input: Arc::new(union_with_alias(left_plan, right_plan, None)?),
         })))
+    }
+
+    /// Apply a recursive union.
+    pub fn union_recursive(&self, plan: LogicalPlan, is_distinct: bool) -> Result<Self> {
+        dbg!(self);
+        dbg!(plan);
+        todo!();
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
