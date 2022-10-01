@@ -352,6 +352,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let set_expr = query.body;
         if let Some(with) = query.with {
             // Process CTEs from top to bottom
+            if with.recursive {
+                return Err(DataFusionError::NotImplemented(
+                    "Recursive CTEs are not supported".to_string(),
+                ));
+            }
             // do not allow self-references
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
