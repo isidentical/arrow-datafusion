@@ -22,7 +22,8 @@
 //! Regex expressions
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericStringArray, OffsetSizeTrait,
+    new_null_array, Array, ArrayData, ArrayRef, BufferBuilder, GenericStringArray,
+    OffsetSizeTrait,
 };
 use arrow::compute;
 use datafusion_common::{DataFusionError, Result};
@@ -254,13 +255,41 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // with rust ones.
     let replacement = regex_replace_posix_groups(replacement);
 
-    let result = string_array
-        .iter()
-        .map(|string| {
-            string.map(|string| re.replacen(string, limit, replacement.as_str()))
-        })
-        .collect::<GenericStringArray<T>>();
-    Ok(Arc::new(result) as ArrayRef)
+    // We are going to create the underlying string buffer from its parts
+    // to be able to re-use the existing null buffer for sparse arrays.
+    let mut vals = BufferBuilder::<u8>::new({
+        let offsets = string_array.value_offsets();
+        (offsets[string_array.len()] - offsets[0])
+            .to_usize()
+            .unwrap()
+    });
+    let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
+    new_offsets.append(T::zero());
+
+    string_array.iter().for_each(|val| {
+        if let Some(val) = val {
+            let result = re.replacen(val, limit, replacement.as_str());
+            vals.append_slice(&result.as_bytes());
+        }
+        new_offsets.append(T::from_usize(vals.len()).unwrap());
+    });
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            GenericStringArray::<T>::DATA_TYPE,
+            string_array.len(),
+            None,
+            string_array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(string_array.offset(), string_array.len())),
+            0,
+            vec![new_offsets.finish(), vals.finish()],
+            vec![],
+        )
+    };
+    let result_array = GenericStringArray::<T>::from(data);
+    Ok(Arc::new(result_array) as ArrayRef)
 }
 
 /// Determine which implementation of the regexp_replace to use based
