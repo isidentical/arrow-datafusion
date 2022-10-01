@@ -29,8 +29,8 @@ use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
-        Window,
+        RecursiveQuery, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
+        Union, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
@@ -451,11 +451,18 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Apply a recursive union.
-    pub fn union_recursive(&self, plan: LogicalPlan, is_distinct: bool) -> Result<Self> {
-        dbg!(self);
-        dbg!(plan);
-        todo!();
+    /// Convert a regular plan into a recursive query.
+    pub fn to_recursive_query(
+        &self,
+        recursive_term: LogicalPlan,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        // TODO: we need to do a bunch of validation here. Maybe more.
+        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+            static_term: Arc::new(self.plan.clone()),
+            recursive_term: Arc::new(recursive_term),
+            is_distinct,
+        })))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)

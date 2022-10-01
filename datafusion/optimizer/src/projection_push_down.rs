@@ -500,6 +500,7 @@ fn optimize_plan(
         | LogicalPlan::DropView(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
+        | LogicalPlan::RecursiveQuery { .. }
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
             // collect all required columns by this plan

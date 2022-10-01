@@ -61,6 +61,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::logical_plan::RecursiveQuery;
 use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
 use datafusion_expr::WindowFrameUnits;
 use datafusion_physical_expr::expressions::Literal;
@@ -1026,6 +1027,10 @@ impl DefaultPhysicalPlanner {
                     };
 
                     Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
+                }
+                LogicalPlan::RecursiveQuery(RecursiveQuery { .. }) => {
+                    dbg!(logical_plan);
+                    todo!();
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL

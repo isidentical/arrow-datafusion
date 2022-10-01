@@ -374,12 +374,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             //   1. A static term   (the left hand side on the SQL, where the
                             //                       referecing to the same CTE is not allowed)
                             //
-                            //   2. A variadic term (the right hand side, and the recursive
+                            //   2. A recursive term (the right hand side, and the recursive
                             //                       part)
 
                             // Since static term does not have any specific properties, it can
                             // be compiled as if it was a regular expression. This would also
-                            // allow us to infer the schema to be used in the variadic term.
+                            // allow us to infer the schema to be used in the recursive term.
                             let static_plan = self.set_expr_to_plan(
                                 *left,
                                 Some(cte_name.clone()),
@@ -398,7 +398,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             //      WHERE n < 100
                             // )
                             //
-                            // The planner for the variadic term will complain that 'values' (self
+                            // The planner for the recursive term will complain that 'values' (self
                             // reference) is not defined. For getting around this, while preserving
                             // the actual schema of the whole operation, we'll register an empty relation
                             // as a CTE with the name 'values'. This will allow the SQL planner to
@@ -410,7 +410,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             );
                             ctes.insert(cte_name.clone(), term_scan.build()?);
 
-                            let variadic_plan = self.set_expr_to_plan(
+                            let recursive_plan = self.set_expr_to_plan(
                                 *right,
                                 Some(cte_name.clone()),
                                 &mut ctes.clone(),
@@ -419,7 +419,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             )?;
 
                             let final_plan = LogicalPlanBuilder::from(static_plan)
-                                .union_recursive(variadic_plan, all)?
+                                .to_recursive_query(recursive_plan, all)?
                                 .build()?;
 
                             // This is where we are replacing the temporary CTE we registered with the actual

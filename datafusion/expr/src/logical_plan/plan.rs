@@ -102,6 +102,8 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
+    /// A variadic query (e.g. "Recursive CTEs")
+    RecursiveQuery(RecursiveQuery),
 }
 
 impl LogicalPlan {
@@ -140,6 +142,9 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
+            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                static_term.schema()
+            }
         }
     }
 
@@ -196,6 +201,9 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
+            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                static_term.all_schemas()
+            }
             LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
         }
     }
@@ -261,7 +269,8 @@ impl LogicalPlan {
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(_) => {
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::RecursiveQuery(_) => {
                 vec![]
             }
         }
@@ -279,6 +288,11 @@ impl LogicalPlan {
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => vec![static_term, recursive_term],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -417,6 +431,11 @@ impl LogicalPlan {
             | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => static_term.accept(visitor)? && recursive_term.accept(visitor)?,
             LogicalPlan::Union(Union { inputs, .. }) => {
                 for input in inputs {
                     if !input.accept(visitor)? {
@@ -942,6 +961,11 @@ impl LogicalPlan {
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
+                    LogicalPlan::RecursiveQuery(RecursiveQuery {
+                        is_distinct, ..
+                    }) => {
+                        write!(f, "RecursiveQuery: is_distinct={}", is_distinct)
+                    }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
@@ -1317,6 +1341,17 @@ pub struct Limit {
 pub struct Distinct {
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
+}
+
+/// A variadic query operation
+#[derive(Clone)]
+pub struct RecursiveQuery {
+    /// The static term
+    pub static_term: Arc<LogicalPlan>,
+    /// The recursive term
+    pub recursive_term: Arc<LogicalPlan>,
+    /// Distinction
+    pub is_distinct: bool,
 }
 
 /// Aggregates its input based on a set of grouping and aggregate
