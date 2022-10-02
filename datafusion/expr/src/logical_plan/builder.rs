@@ -28,9 +28,9 @@ use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-        RecursiveQuery, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Values, Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, NamedRelation, Partitioning,
+        PlanType, Projection, RecursiveQuery, Repartition, Sort, SubqueryAlias,
+        TableScan, ToStringifiedPlan, Union, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
@@ -116,9 +116,14 @@ impl LogicalPlanBuilder {
         }))
     }
 
-    pub fn empty_with_schema(produce_one_row: bool, schema: DFSchemaRef) -> Self {
-        Self::from(LogicalPlan::EmptyRelation(EmptyRelation {
-            produce_one_row,
+    /// A named temporary relation with a schema.
+    ///
+    /// This is used to represent a relation that does not exist at the
+    /// planning stage, but will be created at execution time with the
+    /// given schema.
+    pub fn named_relation(name: &str, schema: DFSchemaRef) -> Self {
+        Self::from(LogicalPlan::NamedRelation(NamedRelation {
+            name: name.to_string(),
             schema,
         }))
     }
@@ -454,11 +459,18 @@ impl LogicalPlanBuilder {
     /// Convert a regular plan into a recursive query.
     pub fn to_recursive_query(
         &self,
+        name: String,
         recursive_term: LogicalPlan,
         is_distinct: bool,
     ) -> Result<Self> {
         // TODO: we need to do a bunch of validation here. Maybe more.
+        if is_distinct {
+            return Err(DataFusionError::NotImplemented(
+                "Recursive queries with distinct is not supported".to_string(),
+            ));
+        }
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name,
             static_term: Arc::new(self.plan.clone()),
             recursive_term: Arc::new(recursive_term),
             is_distinct,

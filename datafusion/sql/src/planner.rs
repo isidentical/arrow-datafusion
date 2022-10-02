@@ -387,7 +387,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 outer_query_schema,
                             )?;
 
-                            // Since the recursive CTE includes a component that references a
+                            // Since the recursive CTEs include a component that references a
                             // table with its name, like the example below:
                             //
                             // WITH RECURSIVE values(n) AS (
@@ -398,17 +398,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             //      WHERE n < 100
                             // )
                             //
-                            // The planner for the recursive term will complain that 'values' (self
-                            // reference) is not defined. For getting around this, while preserving
-                            // the actual schema of the whole operation, we'll register an empty relation
-                            // as a CTE with the name 'values'. This will allow the SQL planner to
-                            // handle the more complex cases (like joins and what not), and when we'll
-                            // get it to the proper form once we are compiling it into the final form.
-                            let term_scan = LogicalPlanBuilder::empty_with_schema(
-                                false,
+                            // We need a temporary 'relation' to be referenced and used. PostgreSQL
+                            // calls this a 'working table', but it is entirely an implementation
+                            // detail and a 'real' table with that name might not even exist (as
+                            // in the case of DataFusion).
+                            //
+                            // Since we can't simply register a table during planning stage (it is
+                            // an execution problem), we'll use a relation object that preserves the
+                            // schema of the input perfectly and also knows which recursive CTE it is
+                            // bound to.
+
+                            let named_rel = LogicalPlanBuilder::named_relation(
+                                cte_name.as_str(),
                                 static_plan.schema().clone(),
-                            );
-                            ctes.insert(cte_name.clone(), term_scan.build()?);
+                            )
+                            .build()?;
+
+                            // For all the self references in the variadic term, we'll replace it
+                            // with the temporary relation we created above by temporarily registering
+                            // it as a CTE.
+                            ctes.insert(cte_name.clone(), named_rel);
 
                             let recursive_plan = self.set_expr_to_plan(
                                 *right,
@@ -419,11 +428,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             )?;
 
                             let final_plan = LogicalPlanBuilder::from(static_plan)
-                                .to_recursive_query(recursive_plan, all)?
+                                .to_recursive_query(
+                                    cte_name.clone(),
+                                    recursive_plan,
+                                    !all,
+                                )?
                                 .build()?;
 
-                            // This is where we are replacing the temporary CTE we registered with the actual
-                            // one.
+                            // Once everything done, we can deregister our temporary relation and replace it
+                            // with the actual CTE plan.
                             ctes.insert(cte_name.clone(), final_plan);
                         }
                         _ => {

@@ -37,12 +37,14 @@ pub struct RecordBatchReceiverStream {
     inner: ReceiverStream<ArrowResult<RecordBatch>>,
 
     #[allow(dead_code)]
-    drop_helper: AbortOnDropSingle<()>,
+    drop_helper: Option<AbortOnDropSingle<()>>,
 }
 
 impl RecordBatchReceiverStream {
     /// Construct a new [`RecordBatchReceiverStream`] which will send
-    /// batches of the specified schema from `inner`
+    /// batches of the specified schema from `inner`. This API also expects
+    /// a `JoinHandle` to the task that is producing the batches. If there
+    /// isn't an accessible handle, see [`create_without_handle`].
     pub fn create(
         schema: &SchemaRef,
         rx: tokio::sync::mpsc::Receiver<ArrowResult<RecordBatch>>,
@@ -53,7 +55,22 @@ impl RecordBatchReceiverStream {
         Box::pin(Self {
             schema,
             inner,
-            drop_helper: AbortOnDropSingle::new(join_handle),
+            drop_helper: Some(AbortOnDropSingle::new(join_handle)),
+        })
+    }
+
+    /// Construct a new [`RecordBatchReceiverStream`] which will send
+    /// batches of the specified schema from `inner`.
+    pub fn create_without_handle(
+        schema: &SchemaRef,
+        rx: tokio::sync::mpsc::Receiver<ArrowResult<RecordBatch>>,
+    ) -> SendableRecordBatchStream {
+        let schema = schema.clone();
+        let inner = ReceiverStream::new(rx);
+        Box::pin(Self {
+            schema,
+            inner,
+            drop_helper: None,
         })
     }
 }

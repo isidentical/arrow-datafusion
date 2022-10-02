@@ -514,13 +514,14 @@ pub fn from_plan(
         LogicalPlan::Distinct(Distinct { .. }) => Ok(LogicalPlan::Distinct(Distinct {
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::RecursiveQuery(RecursiveQuery { is_distinct, .. }) => {
-            Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                static_term: Arc::new(inputs[0].clone()),
-                recursive_term: Arc::new(inputs[1].clone()),
-                is_distinct: *is_distinct,
-            }))
-        }
+        LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name, is_distinct, ..
+        }) => Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name: name.clone(),
+            static_term: Arc::new(inputs[0].clone()),
+            recursive_term: Arc::new(inputs[1].clone()),
+            is_distinct: *is_distinct,
+        })),
         LogicalPlan::Analyze(a) => {
             assert!(expr.is_empty());
             assert_eq!(inputs.len(), 1);
@@ -545,6 +546,7 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::NamedRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)

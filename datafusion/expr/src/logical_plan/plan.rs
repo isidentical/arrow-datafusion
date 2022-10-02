@@ -68,6 +68,8 @@ pub enum LogicalPlan {
     TableScan(TableScan),
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation(EmptyRelation),
+    /// A named temporary relation with a schema.
+    NamedRelation(NamedRelation),
     /// Subquery
     Subquery(Subquery),
     /// Aliased relation provides, or changes, the name of a relation.
@@ -111,6 +113,7 @@ impl LogicalPlan {
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
             LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
+            LogicalPlan::NamedRelation(NamedRelation { schema, .. }) => schema,
             LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScan {
                 projected_schema, ..
@@ -189,6 +192,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(Explain { schema, .. })
             | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
+            | LogicalPlan::NamedRelation(NamedRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
             | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
             | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
@@ -255,6 +259,7 @@ impl LogicalPlan {
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::NamedRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
@@ -310,6 +315,7 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::NamedRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
@@ -469,6 +475,7 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::NamedRelation(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
@@ -709,6 +716,9 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
+                    LogicalPlan::NamedRelation(NamedRelation { name, .. }) => {
+                        write!(f, "NamedRelation: {}", name)
+                    }
                     LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
                             .iter()
@@ -1082,6 +1092,15 @@ pub struct EmptyRelation {
     pub schema: DFSchemaRef,
 }
 
+/// A named temporary relation with a known schema.
+#[derive(Clone)]
+pub struct NamedRelation {
+    /// The relation name
+    pub name: String,
+    /// The schema description
+    pub schema: DFSchemaRef,
+}
+
 /// Values expression. See
 /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
 /// documentation for more details.
@@ -1346,6 +1365,8 @@ pub struct Distinct {
 /// A variadic query operation
 #[derive(Clone)]
 pub struct RecursiveQuery {
+    /// Name of the query
+    pub name: String,
     /// The static term
     pub static_term: Arc<LogicalPlan>,
     /// The recursive term
