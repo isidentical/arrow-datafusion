@@ -24,9 +24,9 @@ pub use datafusion_expr::{
         Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
         CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, EmptyRelation,
         Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
-        Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
-        StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
-        UserDefinedLogicalNode, Values, Window,
+        NamedRelation, Partitioning, PlanType, PlanVisitor, Projection, RecursiveQuery,
+        Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+        ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window,
     },
     TableProviderFilterPushDown, TableSource,
 };

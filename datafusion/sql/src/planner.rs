@@ -351,8 +351,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
         if let Some(with) = query.with {
-            // Process CTEs from top to bottom
-            // do not allow self-references
+            let is_recursive = with.recursive;
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = normalize_ident(&cte.alias.name);
@@ -362,14 +361,100 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         cte_name
                     ))));
                 }
-                // create logical plan & pass backreferencing CTEs
-                let logical_plan = self.query_to_plan_with_alias(
-                    cte.query,
-                    Some(cte_name.clone()),
-                    &mut ctes.clone(),
-                    outer_query_schema,
-                )?;
-                ctes.insert(cte_name, logical_plan);
+                let cte_query = cte.query;
+                if is_recursive {
+                    match *cte_query.body {
+                        SetExpr::SetOperation {
+                            op: SetOperator::Union,
+                            left,
+                            right,
+                            all,
+                        } => {
+                            // Each recursive CTE consists from two parts in the logical plan:
+                            //   1. A static term   (the left hand side on the SQL, where the
+                            //                       referecing to the same CTE is not allowed)
+                            //
+                            //   2. A recursive term (the right hand side, and the recursive
+                            //                       part)
+
+                            // Since static term does not have any specific properties, it can
+                            // be compiled as if it was a regular expression. This would also
+                            // allow us to infer the schema to be used in the recursive term.
+                            let static_plan = self.set_expr_to_plan(
+                                *left,
+                                Some(cte_name.clone()),
+                                &mut ctes.clone(),
+                                outer_query_schema,
+                            )?;
+
+                            // Since the recursive CTEs include a component that references a
+                            // table with its name, like the example below:
+                            //
+                            // WITH RECURSIVE values(n) AS (
+                            //      SELECT 1 as n -- static term
+                            //    UNION ALL
+                            //      SELECT n + 1
+                            //      FROM values -- self reference
+                            //      WHERE n < 100
+                            // )
+                            //
+                            // We need a temporary 'relation' to be referenced and used. PostgreSQL
+                            // calls this a 'working table', but it is entirely an implementation
+                            // detail and a 'real' table with that name might not even exist (as
+                            // in the case of DataFusion).
+                            //
+                            // Since we can't simply register a table during planning stage (it is
+                            // an execution problem), we'll use a relation object that preserves the
+                            // schema of the input perfectly and also knows which recursive CTE it is
+                            // bound to.
+
+                            let named_rel = LogicalPlanBuilder::named_relation(
+                                cte_name.as_str(),
+                                static_plan.schema().clone(),
+                            )
+                            .build()?;
+
+                            // For all the self references in the variadic term, we'll replace it
+                            // with the temporary relation we created above by temporarily registering
+                            // it as a CTE.
+                            ctes.insert(cte_name.clone(), named_rel);
+
+                            let recursive_plan = self.set_expr_to_plan(
+                                *right,
+                                Some(cte_name.clone()),
+                                &mut ctes.clone(),
+                                // TODO: this might not be so accurate.
+                                outer_query_schema,
+                            )?;
+
+                            let final_plan = LogicalPlanBuilder::from(static_plan)
+                                .to_recursive_query(
+                                    cte_name.clone(),
+                                    recursive_plan,
+                                    !all,
+                                )?
+                                .build()?;
+
+                            // Once everything done, we can deregister our temporary relation and replace it
+                            // with the actual CTE plan.
+                            ctes.insert(cte_name.clone(), final_plan);
+                        }
+                        _ => {
+                            return Err(DataFusionError::SQL(ParserError(
+                                "Invalid recursive CTE".to_string(),
+                            )));
+                        }
+                    };
+                } else {
+                    // create logical plan & pass backreferencing CTEs
+                    let logical_plan = self.query_to_plan_with_alias(
+                        cte_query,
+                        Some(cte_name.clone()),
+                        &mut ctes.clone(),
+                        outer_query_schema,
+                    )?;
+                    ctes.insert(cte_name, logical_plan);
+                }
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;

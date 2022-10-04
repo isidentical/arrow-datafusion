@@ -488,6 +488,7 @@ fn optimize_plan(
         | LogicalPlan::Filter { .. }
         | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::NamedRelation(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Sort { .. }
@@ -500,6 +501,7 @@ fn optimize_plan(
         | LogicalPlan::DropView(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
+        | LogicalPlan::RecursiveQuery { .. }
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
             // collect all required columns by this plan

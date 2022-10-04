@@ -220,6 +220,7 @@ fn optimize(
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::Values(_)
         | LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::NamedRelation(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Limit(_)
@@ -233,6 +234,7 @@ fn optimize(
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
         | LogicalPlan::Distinct(_)
+        | LogicalPlan::RecursiveQuery { .. }
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
             let expr = plan.expressions();

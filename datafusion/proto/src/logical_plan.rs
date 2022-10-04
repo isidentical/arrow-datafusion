@@ -1186,6 +1186,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
+            LogicalPlan::NamedRelation(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for NamedRelation",
+            )),
+            LogicalPlan::RecursiveQuery(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for RecursiveQuery",
+            )),
             LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),

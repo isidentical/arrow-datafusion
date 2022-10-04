@@ -68,6 +68,8 @@ pub enum LogicalPlan {
     TableScan(TableScan),
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation(EmptyRelation),
+    /// A named temporary relation with a schema.
+    NamedRelation(NamedRelation),
     /// Subquery
     Subquery(Subquery),
     /// Aliased relation provides, or changes, the name of a relation.
@@ -102,6 +104,8 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
+    /// A variadic query (e.g. "Recursive CTEs")
+    RecursiveQuery(RecursiveQuery),
 }
 
 impl LogicalPlan {
@@ -109,6 +113,7 @@ impl LogicalPlan {
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
             LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
+            LogicalPlan::NamedRelation(NamedRelation { schema, .. }) => schema,
             LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScan {
                 projected_schema, ..
@@ -140,6 +145,9 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
+            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                static_term.schema()
+            }
         }
     }
 
@@ -184,6 +192,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(Explain { schema, .. })
             | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
+            | LogicalPlan::NamedRelation(NamedRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
             | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
             | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
@@ -196,6 +205,9 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
+            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                static_term.all_schemas()
+            }
             LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
         }
     }
@@ -247,6 +259,7 @@ impl LogicalPlan {
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::NamedRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
@@ -261,7 +274,8 @@ impl LogicalPlan {
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(_) => {
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::RecursiveQuery(_) => {
                 vec![]
             }
         }
@@ -279,6 +293,11 @@ impl LogicalPlan {
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => vec![static_term, recursive_term],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -296,6 +315,7 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::NamedRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
@@ -417,6 +437,11 @@ impl LogicalPlan {
             | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => static_term.accept(visitor)? && recursive_term.accept(visitor)?,
             LogicalPlan::Union(Union { inputs, .. }) => {
                 for input in inputs {
                     if !input.accept(visitor)? {
@@ -450,6 +475,7 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::NamedRelation(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
@@ -690,6 +716,9 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
+                    LogicalPlan::NamedRelation(NamedRelation { name, .. }) => {
+                        write!(f, "NamedRelation: {}", name)
+                    }
                     LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
                             .iter()
@@ -942,6 +971,11 @@ impl LogicalPlan {
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
+                    LogicalPlan::RecursiveQuery(RecursiveQuery {
+                        is_distinct, ..
+                    }) => {
+                        write!(f, "RecursiveQuery: is_distinct={}", is_distinct)
+                    }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
@@ -1055,6 +1089,15 @@ pub struct EmptyRelation {
     /// Whether to produce a placeholder row
     pub produce_one_row: bool,
     /// The schema description of the output
+    pub schema: DFSchemaRef,
+}
+
+/// A named temporary relation with a known schema.
+#[derive(Clone)]
+pub struct NamedRelation {
+    /// The relation name
+    pub name: String,
+    /// The schema description
     pub schema: DFSchemaRef,
 }
 
@@ -1317,6 +1360,19 @@ pub struct Limit {
 pub struct Distinct {
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
+}
+
+/// A variadic query operation
+#[derive(Clone)]
+pub struct RecursiveQuery {
+    /// Name of the query
+    pub name: String,
+    /// The static term
+    pub static_term: Arc<LogicalPlan>,
+    /// The recursive term
+    pub recursive_term: Arc<LogicalPlan>,
+    /// Distinction
+    pub is_distinct: bool,
 }
 
 /// Aggregates its input based on a set of grouping and aggregate
